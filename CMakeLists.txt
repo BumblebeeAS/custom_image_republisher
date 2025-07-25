@@ -11,25 +11,16 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic -Wnon-virtual-dtor -Woverloaded-virtual)
 endif()
 
-find_package(ament_cmake_ros REQUIRED)
-find_package(pluginlib REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(image_transport REQUIRED)
+find_package(ament_cmake_auto REQUIRED)
+ament_auto_find_build_dependencies()
 
 # Build republish
-add_executable(republish src/republish.cpp)
-ament_target_dependencies(republish
-  pluginlib
-  rclcpp
-  image_transport
+ament_auto_add_library(republish_node SHARED
+  src/republish.cpp
+)
+rclcpp_components_register_node(republish_node
+  PLUGIN "custom_image_republisher::Republisher"
+  EXECUTABLE republish
 )
 
-# Install executables
-install(
-  TARGETS republish
-  RUNTIME DESTINATION lib/${PROJECT_NAME}
-)
-
-ament_export_dependencies(rclcpp pluginlib image_transport)
-
-ament_package()
+ament_auto_package()

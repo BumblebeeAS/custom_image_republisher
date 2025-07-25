@@ -37,64 +37,93 @@
 #include "image_transport/image_transport.hpp"
 #include "image_transport/publisher_plugin.hpp"
 
-int main(int argc, char ** argv)
+namespace custom_image_republisher
 {
-  auto vargv = rclcpp::init_and_remove_ros_arguments(argc, argv);
+class Republisher : public rclcpp::Node
+{
+public:
+  explicit Republisher(const rclcpp::NodeOptions & options)
+  : Node("image_republisher", options)
+  {
+    std::string in_transport = "raw";
+    this->declare_parameter<std::string>("in_transport", in_transport);
+    if (!this->get_parameter(
+        "in_transport", in_transport))
+    {
+      RCLCPP_WARN_STREAM(
+        this->get_logger(),
+        "The 'in_transport' parameter was not defined." << in_transport);
+    } else {
+      RCLCPP_INFO_STREAM(
+        this->get_logger(),
+        "The 'in_transport' parameter is set to: " << in_transport);
+    }
 
-  if (vargv.size() < 2) {
-    printf(
-      "Usage: %s in_transport in:=<in_base_topic> [out_transport] out:=<out_base_topic>\n",
-      argv[0]);
-    return 0;
-  }
+    std::string out_transport = "";
+    this->declare_parameter<std::string>("out_transport", out_transport);
+    if (!this->get_parameter(
+        "out_transport", out_transport))
+    {
+      RCLCPP_WARN_STREAM(
+        this->get_logger(),
+        "The parameter 'out_transport' was not defined." << out_transport);
+    } else {
+      RCLCPP_INFO_STREAM(
+        this->get_logger(),
+        "The 'out_transport' parameter is set to: " << out_transport);
+    }
 
-  auto node = rclcpp::Node::make_shared("image_republisher");
+    std::string in_topic = rclcpp::expand_topic_or_service_name("in", get_name(), get_namespace());
+    std::string out_topic = rclcpp::expand_topic_or_service_name("out", get_name(), get_namespace());
 
-  std::string in_topic = rclcpp::expand_topic_or_service_name(
-    "in",
-    node->get_name(), node->get_namespace());
-  std::string out_topic = rclcpp::expand_topic_or_service_name(
-    "out",
-    node->get_name(), node->get_namespace());
+    if (out_transport.empty()) {
+      // Use all available transports for output
+      pub_ = image_transport::create_publisher(this, out_topic, rmw_qos_profile_sensor_data);
 
-  std::string in_transport = vargv[1];
-
-  if (vargv.size() < 3) {
-    // Use all available transports for output
-    auto pub = image_transport::create_publisher(node.get(), out_topic, rmw_qos_profile_sensor_data);
-
-    // Use Publisher::publish as the subscriber callback
-    typedef void (image_transport::Publisher::* PublishMemFn)(
+      // Use Publisher::publish as the subscriber callback
+      typedef void (image_transport::Publisher::* PublishMemFn)(
       const sensor_msgs::msg::Image::ConstSharedPtr &) const;
-    PublishMemFn pub_mem_fn = &image_transport::Publisher::publish;
+      PublishMemFn pub_mem_fn = &image_transport::Publisher::publish;
 
-    auto sub = image_transport::create_subscription(
-      node.get(), in_topic,
-      std::bind(pub_mem_fn, &pub, std::placeholders::_1), in_transport,
-      rmw_qos_profile_sensor_data);
-    rclcpp::spin(node);
-  } else {
-    // Use one specific transport for output
-    std::string out_transport = vargv[2];
+      sub_ = image_transport::create_subscription(
+        this, in_topic,
+        std::bind(pub_mem_fn, &pub_, std::placeholders::_1),
+        in_transport,
+        rmw_qos_profile_sensor_data
+      );
+    } else {
+      // Use one specific transport for output
+      // Load transport plugin
+      typedef image_transport::PublisherPlugin Plugin;
+      loader = std::make_shared<pluginlib::ClassLoader<Plugin>>(
+        "image_transport",
+        "image_transport::PublisherPlugin");
+      std::string lookup_name = Plugin::getLookupName(out_transport);
 
-    // Load transport plugin
-    typedef image_transport::PublisherPlugin Plugin;
-    pluginlib::ClassLoader<Plugin> loader("image_transport", "image_transport::PublisherPlugin");
-    std::string lookup_name = Plugin::getLookupName(out_transport);
+      this->instance = loader->createUniqueInstance(lookup_name);
+      this->instance->advertise(this, out_topic, rmw_qos_profile_sensor_data);
 
-    auto instance = loader.createUniqueInstance(lookup_name);
-    std::shared_ptr<Plugin> pub = std::move(instance);
-    pub->advertise(node.get(), out_topic, rmw_qos_profile_sensor_data);
-
-    // Use PublisherPlugin::publish as the subscriber callback
-    typedef void (Plugin::* PublishMemFn)(const sensor_msgs::msg::Image::ConstSharedPtr &) const;
-    PublishMemFn pub_mem_fn = &Plugin::publishPtr;
-    auto sub = image_transport::create_subscription(
-      node.get(), in_topic,
-      std::bind(pub_mem_fn, pub.get(), std::placeholders::_1), in_transport,
-      rmw_qos_profile_sensor_data);
-    rclcpp::spin(node);
+      // Use PublisherPlugin::publish as the subscriber callback
+      typedef void (Plugin::* PublishMemFn)(const sensor_msgs::msg::Image::ConstSharedPtr &) const;
+      PublishMemFn pub_mem_fn = &Plugin::publishPtr;
+      sub_ = image_transport::create_subscription(
+        this, in_topic,
+        std::bind(pub_mem_fn, this->instance.get(), std::placeholders::_1),
+        in_transport,
+        rmw_qos_profile_sensor_data
+      );
+    }
   }
 
-  return 0;
-}
+private:
+  image_transport::Subscriber sub_;
+  image_transport::Publisher pub_;
+  pluginlib::UniquePtr<image_transport::PublisherPlugin> instance;
+  std::shared_ptr<pluginlib::ClassLoader<image_transport::PublisherPlugin>> loader;
+};
+
+}  // namespace custom_image_republisher
+
+#include "rclcpp_components/register_node_macro.hpp"
+
+RCLCPP_COMPONENTS_REGISTER_NODE(custom_image_republisher::Republisher)
