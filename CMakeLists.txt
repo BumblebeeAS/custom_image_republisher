@@ -23,4 +23,13 @@ rclcpp_components_register_node(republish_node
   EXECUTABLE republish
 )
 
+# Build rectify
+ament_auto_add_library(rectify_node SHARED
+  src/rectify.cpp
+)
+rclcpp_components_register_node(rectify_node
+  PLUGIN "custom_image_republisher::Rectifier"
+  EXECUTABLE rectify
+)
+
 ament_auto_package()
